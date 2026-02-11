@@ -1,0 +1,70 @@
+{
+    "version": "0.1",
+    "builder": {
+        "name": "mybuilder",
+        "driver": "docker-container",
+        "buildkitdFlags": "--allow-insecure-entitlement=network.host",
+        "driverOpts": {
+            "network": "host",
+            "cgroup-parent": "docker"
+        },
+        "gcPolicy": {
+            "maxUnused": "60gb", 
+            "maxUnusedBuild": "60gb",
+            "cacheSweepDelay": "48h"
+        },
+        "useProxy": "on",
+        "proxy_env": {
+            "http_proxy": "http://$WIN_GATEWAY:$PROXY_PORT",
+            "https_proxy": "http://$WIN_GATEWAY:$PROXY_PORT",
+            "no_proxy": "localhost,127.0.0.1,::1,192.168.0.0/16"
+        },
+        "create": {
+            "option": [
+                "--name ${builder.name}",
+                "--driver ${builder.driver}",
+                "--buildkitd-flags \"${builder.buildkitdFlags}\"",
+                "--driver-opt network=${builder.driverOpts.network}",
+                "--driver-opt cgroup-parent=${builder.driverOpts['cgroup-parent']}",
+                "--driver-opt gcpolicy.maxUnused=${builder.gcPolicy.maxUnused}",
+                "--driver-opt gcpolicy.maxUnusedBuild=${builder.gcPolicy.maxUnusedBuild}",
+                "--driver-opt gcpolicy.cacheSweepDelay=${builder.gcPolicy.cacheSweepDelay}",
+                "$( if [[ '${builder.useProxy}' == 'on' ]]; then echo '--driver-opt env.http_proxy=${builder.proxy_env.http_proxy} --driver-opt env.https_proxy=${builder.proxy_env.https_proxy} --driver-opt env.no_proxy=${builder.proxy_env.no_proxy}'; fi )"
+            ],
+            "cmd": "docker buildx create ${builder.create.option.join(' ')} --use --bootstrap"
+        }
+    },
+    "build": {
+        "context": ".",
+        "tags": "new_template:latest",
+        "dockerfile": "Dockerfile",
+        "cacheArgs":{
+            "autoCleanOldCaches": "on",
+            "type": "local",
+            "localCachePath": "/mnt/wsl/disk2/.buildkit-cache",
+            "cacheSrc": "${cacheArgs.localCachePath}/${build.tags}/from",
+            "cacheDest": "$( if [[ '${cacheArgs.autoCleanOldCaches}' == 'off' ]]; then echo '${cacheSrc}'; else echo '${cacheArgs.localCachePath}/${build.tags}/to'; fi )",
+            "mode": "max"
+        },
+        "options": [
+            "--progress=plain",
+            "--pull=false",
+            "--load",
+            "--cache-from type=local,src=${cacheArgs.cacheSrc}",
+            "--cache-to type=local,dest=${cacheDest},mode=${cacheArgs.mode},auto-clean=${cacheArgs.autoCleanOldCaches}",
+            "-f ${build.dockerfile}",
+            "-t ${build.tags}",
+            "--build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+            "--build-arg VERSION=1.0",
+            "--build-arg UID=$(id -u)",
+            "--build-arg GID=$(id -g)",
+            "--build-arg USERNAME=$(id -u -n)",
+            "--label maintainer=kflyn825@outlook.com",
+            "--label version=${tags}",
+            "--output type=docker",
+            "${build.context}"
+        ],
+        "cmd": "docker buildx build ${build.options.join('    ')}"
+
+    }
+}
