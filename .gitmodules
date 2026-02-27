@@ -1,3 +1,4 @@
 [submodule "shell_exception_handling_core"]
 	path = shell_exception_handling_core
 	url = git@github.com:kevin-825/shell_exception_handling_core.git
+	branch = main
