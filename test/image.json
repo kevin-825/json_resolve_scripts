@@ -36,14 +36,23 @@
     },
     "build": {
         "context": ".",
-        "tags": "new_template:latest",
+        "userNameSpace": "kflyn825",
+        "repoName": "rvdev",
+        "tag": "latest",
+        "imgName": "${userNameSpace}/${repoName}:${tag}",
         "dockerfile": "Dockerfile",
+        "toolchain_base":"/mnt/wsl/vhd0/opt/riscv",
+        "QEMU_PATH":"${toolchain_base}/qemu/bin",
+        "SPIKE_PATH":"${toolchain_base}/spike/bin",
+        "RISCV_PK_PATH":"${toolchain_base}/pk/riscv64-unknown-elf/bin",
+        "RV_NEWLIB_PATH":"${toolchain_base}/rv_gnu_toolchain_relocated/bin",
+        "RV_GLIBC_PATH":"${toolchain_base}/glibc/riscv/bin",
         "cacheArgs":{
             "autoCleanOldCaches": "on",
             "type": "local",
             "localCachePath": "/mnt/wsl/disk2/.buildkit-cache",
-            "cacheSrc": "${cacheArgs.localCachePath}/${build.tags}/from",
-            "cacheDest": "$( if [[ '${cacheArgs.autoCleanOldCaches}' == 'off' ]]; then echo '${cacheSrc}'; else echo '${cacheArgs.localCachePath}/${build.tags}/to'; fi )",
+            "cacheSrc": "${cacheArgs.localCachePath}/${repoName}_${tag}/from",
+            "cacheDest": "$( if [[ '${cacheArgs.autoCleanOldCaches}' == 'off' ]]; then echo '${cacheSrc}'; else echo '${cacheArgs.localCachePath}/${repoName}_${tag}/to'; fi )",
             "mode": "max"
         },
         "options": [
@@ -53,18 +62,23 @@
             "--cache-from type=local,src=${cacheArgs.cacheSrc}",
             "--cache-to type=local,dest=${cacheDest},mode=${cacheArgs.mode},auto-clean=${cacheArgs.autoCleanOldCaches}",
             "-f ${build.dockerfile}",
-            "-t ${build.tags}",
+            "-t ${imgName}",
             "--build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
             "--build-arg VERSION=1.0",
             "--build-arg UID=$(id -u)",
             "--build-arg GID=$(id -g)",
             "--build-arg USERNAME=$(id -u -n)",
+            "--build-arg QEMU_PATH=${build.QEMU_PATH}",
+            "--build-arg SPIKE_PATH=${build.SPIKE_PATH}",
+            "--build-arg RISCV_PK_PATH=${build.RISCV_PK_PATH}",
+            "--build-arg RV_NEWLIB_PATH=${build.RV_NEWLIB_PATH}",
+            "--build-arg RV_GLIBC_PATH=${build.RV_GLIBC_PATH}",
             "--label maintainer=kflyn825@outlook.com",
-            "--label version=${tags}",
+            "--label version=1.0",
             "--output type=docker",
             "${build.context}"
         ],
-        "cmd": "docker buildx build ${build.options.join('    ')}"
+        "cmd": "docker buildx build     ${build.options.join('    ')}"
 
     }
 }
