@@ -48,14 +48,6 @@ _resolve_from_json() {
     VISITED_KEYS["$fixed_key"]=1
     STACK_ORDER+=("$fixed_key") # PUSH to ordered stack
 
-    # Iterate through the indexed array for guaranteed order
-    echo "before stacking $fixed_key, found_value: $found_value,current stack:" >&2
-    local i=1
-    for key in "${STACK_ORDER[@]}"; do
-        echo "  $i. \${$key}" >&2
-        ((i++))
-    done
-    
     output_reference="$found_value"
 
     if [[ "$found_value" =~ $RE_JSON_TEMPLATE ]]; then
@@ -67,14 +59,6 @@ _resolve_from_json() {
     fi
     unset VISITED_KEYS["$fixed_key"]
     unset 'STACK_ORDER[${#STACK_ORDER[@]}-1]' # POP from ordered stack
-
-    # Iterate through the indexed array for guaranteed order
-    echo " after unsetting $fixed_key, current stack:" >&2
-    local i=1
-    for key in "${STACK_ORDER[@]}"; do
-        echo "  $i. \${$key}" >&2
-        ((i++))
-    done
 }
 
 _resolve_subshell() {
