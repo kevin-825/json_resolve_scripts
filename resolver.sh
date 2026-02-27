@@ -48,12 +48,33 @@ _resolve_from_json() {
     VISITED_KEYS["$fixed_key"]=1
     STACK_ORDER+=("$fixed_key") # PUSH to ordered stack
 
+    # Iterate through the indexed array for guaranteed order
+    echo "before stacking $fixed_key, found_value: $found_value,current stack:" >&2
+    local i=1
+    for key in "${STACK_ORDER[@]}"; do
+        echo "  $i. \${$key}" >&2
+        ((i++))
+    done
+    
     output_reference="$found_value"
 
-    if [[ ! "$found_value" =~ $RE_JSON_TEMPLATE ]]; then
-        unset VISITED_KEYS["$fixed_key"]
-        unset 'STACK_ORDER[${#STACK_ORDER[@]}-1]' # POP from ordered stack
+    if [[ "$found_value" =~ $RE_JSON_TEMPLATE ]]; then
+        local sub_template="${BASH_REMATCH[0]}"
+        local resolved_sub_value
+        _resolve_from_json "$json_file" "$sub_template" "resolved_sub_value"
+        [[ $? -ne 0 ]] && throw_exception "PARENT_RESOLUTION_FAILURE" 1 "Failed to resolve nested template: $sub_template in key: $fixed_key"
+        output_reference="${output_reference//"$sub_template"/"$resolved_sub_value"}"
     fi
+    unset VISITED_KEYS["$fixed_key"]
+    unset 'STACK_ORDER[${#STACK_ORDER[@]}-1]' # POP from ordered stack
+
+    # Iterate through the indexed array for guaranteed order
+    echo " after unsetting $fixed_key, current stack:" >&2
+    local i=1
+    for key in "${STACK_ORDER[@]}"; do
+        echo "  $i. \${$key}" >&2
+        ((i++))
+    done
 }
 
 _resolve_subshell() {
