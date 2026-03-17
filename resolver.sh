@@ -1,7 +1,7 @@
 #!/bin/bash
 # ==============================================================================
 # MODULE: generic_resolver.sh
-# DESCRIPTION: Generic JSON/Env/Shell Resolver.
+# DESCRIPTION: Generic JSON/Env/Shell Resolver (Supports File Path OR Raw String).
 # ==============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -9,15 +9,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/shell_exception_handling_core/exception_handling_core.sh"
 
 # --- 1. REGEX PATTERNS ---
-#RE_JSON_TEMPLATE='\$\{([^}]+)\}' 
 export RE_JSON_TEMPLATE='\$\{((?:[^{}]|(?R))*)\}'
 RE_SHELL_COMMAND='\$\(([^)]+)\)'
 RE_ENV_VARIABLE='\$([a-zA-Z_][a-zA-Z0-9_]*)'
 regex_join_pattern='\$\{(.*)\.join\(['\''"]([^'\''"]*)['\''"]\)\}'
+
 # --- 2. STATE TRACKING ---
 declare -A VISITED_KEYS
 declare -a STACK_ORDER
-# --- 2. INTERNAL RESOLUTION MODULES ---
+
+
+# --- 3. INTERNAL RESOLUTION MODULES ---
 
 log_info()    { printf "\e[34m[INFO]\e[0m  %s\n" "$1" >&2; }
 log_warn()    { printf "\e[33m[WARN]\e[0m  %s\n" "$1" >&2; }
@@ -30,8 +32,19 @@ log_debug() {
     fi
 }
 
+# --- UPGRADE: Polymorphic Input Handler ---
+_get_json_content() {
+    local input_data="$1"
+    # If it's a valid file on disk, read it. Otherwise, assume it's a raw JSON string.
+    if [[ -f "$input_data" ]]; then
+        cat "$input_data"
+    else
+        echo "$input_data"
+    fi
+}
+
 _resolve_from_json() {
-    local json_file="$1"
+    local json_input="$1"
     local json_key_template="$2" 
     local -n output_reference=$3
     local json_key_template_captured="$4"
@@ -46,16 +59,20 @@ _resolve_from_json() {
         local extracted_path="${BASH_REMATCH[1]}"
         local resolved_sub_value
         log_debug "Found nested template: $sub_template extracted_path: $extracted_path in value of key: $json_key_template. Resolving..."
-        _resolve_from_json "$json_file" "$sub_template" "resolved_sub_value" "$extracted_path"
+        _resolve_from_json "$json_input" "$sub_template" "resolved_sub_value" "$extracted_path"
         [[ $? -ne 0 ]] && throw_exception "PARENT_RESOLUTION_FAILURE" 1 "Failed to resolve nested template: $sub_template in key: $fixed_key"
         search_path="${search_path//"$sub_template"/"$resolved_sub_value"}"
         json_key_template="${json_key_template//"$sub_template"/"$resolved_sub_value"}"
         log_debug "#########resolved_sub_value: $resolved_sub_value search_path: $search_path json_key_template: $json_key_template" >&2
-        #output_reference="$resolved_sub_value"
     fi
     log_debug "updated search_path: $search_path "
+    
+    # UPGRADE: Fetch JSON content via helper and pipe to jq
+    local json_content
+    json_content=$(_get_json_content "$json_input")
+    
     local found_value
-    found_value=$(jq -e -r "
+    found_value=$(echo "$json_content" | jq -e -r "
         [   paths(scalars) as \$p 
             | \$p 
             | map(tostring) 
@@ -63,13 +80,16 @@ _resolve_from_json() {
             | select(endswith(\"$search_path\")) 
         ] as \$matches 
         | if (\$matches | length > 0) then getpath(\$matches[0] | split(\".\")) else null end
-    " "$json_file" 2>/dev/null) || found_value="null"
+    " 2>/dev/null) || found_value="null"
+    
     local fixed_key="$search_path"
     if [[ "$found_value" == "null" || -z "$found_value" ]]; then
-        throw_exception "RESOLVE_JSON_KEY_MISSING" 6 "$json_key_template" "$json_file" "found_value" "fixed_key"
+        # FIX: Pass the actual $json_input, not the error_label, so the handler can read the JSON
+        throw_exception "RESOLVE_JSON_KEY_MISSING" 6 "$json_key_template" "$json_input" "found_value" "fixed_key"
     fi
     log_debug "fixed_key: $fixed_key"
     log_debug "found_value: $found_value"
+    
     # 1. Check & Lock right here in the engine
     if [[ -n "${VISITED_KEYS[$fixed_key]}" ]]; then
         throw_exception "CIRCULAR_DEPENDENCY" 12 "$fixed_key"
@@ -84,7 +104,7 @@ _resolve_from_json() {
         local extracted_path="${BASH_REMATCH[1]}"
         local resolved_sub_value
         log_debug "Found nested template: $sub_template extracted_path: $extracted_path in value of key: $fixed_key. Resolving..."
-        _resolve_from_json "$json_file" "$sub_template" "resolved_sub_value" "$extracted_path"
+        _resolve_from_json "$json_input" "$sub_template" "resolved_sub_value" "$extracted_path"
         [[ $? -ne 0 ]] && throw_exception "PARENT_RESOLUTION_FAILURE" 1 "Failed to resolve nested template: $sub_template in key: $fixed_key"
         output_reference="${output_reference//"$sub_template"/"$resolved_sub_value"}"
     fi
@@ -98,8 +118,15 @@ _resolve_subshell() {
     local shell_template="$1"
     if [[ "$shell_template" =~ $RE_SHELL_COMMAND ]]; then
         local command="${BASH_REMATCH[1]}"
-        local command_output=$(eval "$command")
-        [[ $? -ne 0 ]] && throw_exception "RESOLVE_SHELL_FAIL" 7 "$command"
+        log_debug ">>> [INFO] Resolving subshell command: $command shell_template: $shell_template" >&2
+
+        local command_output
+        # 2. Assign the value (now $? will belong to eval)
+        command_output=$(eval "$command")
+        if [[ $? -ne 0 ]]; then
+            log_error "Subshell command failed: $command"
+            throw_exception "RESOLVE_SHELL_FAIL" 7 "$command"
+        fi
         echo "$command_output"
     fi
 }
@@ -114,10 +141,10 @@ _resolve_env_var() {
     fi
 }
 
-# --- 3. THE GENERIC ENGINE ---
+# --- 4. THE GENERIC ENGINE ---
 
 resolve_single_line() {
-    local json_file="$1"
+    local json_input="$1"
     local current_line="$2"
 
     while [[ "$current_line" =~ \$ ]]; do
@@ -129,14 +156,13 @@ resolve_single_line() {
 
             log_debug "Found JSON template: $template_found in line: $current_line. Resolving..." >&2
             local resolved_text=""
-            _resolve_from_json "$json_file" "$template_found" "resolved_text" "$captured"
+            _resolve_from_json "$json_input" "$template_found" "resolved_text" "$captured"
             
             if [[ $? -ne 0 ]]; then
                 throw_exception "PARENT_RESOLUTION_FAILURE" 1 "Subshell failed: $template_found"
             fi
             
             current_line="${current_line//"$template_found"/"$resolved_text"}"
-            #echo "[resolve_single_line] current_line: $current_line resolved: $resolved_text" >&2
             continue 
         fi
 
@@ -163,31 +189,38 @@ resolve_single_line() {
 }
 
 resolve_value() {
-    local json_file="$1"
+    local json_input="$1"
     local key_path="$2"
     
-    log_info "Resolving path: $key_path"
+    #log_info "Resolving path: $key_path"
 
     local raw_json_output
     local jq_exit_code=0
-    raw_json_output=$(jq -r ".$key_path" "$json_file" 2>/dev/null) || jq_exit_code=$?
+    
+    # UPGRADE: Fetch JSON content via helper and pipe to jq
+    local json_content
+    json_content=$(_get_json_content "$json_input")
+    
+    raw_json_output=$(echo "$json_content" | jq -r ".$key_path" 2>/dev/null) || jq_exit_code=$?
+    
     local resolved_value=""
     local fixed_key=""
     log_debug "Initial jq output for key_path: $key_path is: $raw_json_output with exit code: ${jq_exit_code}"
     if [[ "$raw_json_output" == "null" || -z "$raw_json_output" || $jq_exit_code != 0 ]]; then
-        log_debug "Initial jq resolution failed for key_path: $key_path in file: $json_file. Attempting to resolve missing key..."
-        throw_exception "RESOLVE_JSON_KEY_MISSING" 9 "$key_path" "$json_file" "resolved_value" "fixed_key"
+        log_debug "Initial jq resolution failed for key_path: $key_path. Attempting to resolve missing key..."
+        # FIX: Pass the actual $json_input here as well
+        throw_exception "RESOLVE_JSON_KEY_MISSING" 9 "$key_path" "$json_input" "resolved_value" "fixed_key"
         raw_json_output="$resolved_value"
     fi
 
     while IFS= read -r line; do
-        resolve_single_line "$json_file" "$line"
+        resolve_single_line "$json_input" "$line"
     done <<< "$raw_json_output"
 }
 
 json_array_join() {
     local failed_key="${HANDLER_ARGS[0]}"
-    local json_file="${HANDLER_ARGS[1]}"
+    local json_input="${HANDLER_ARGS[1]}"
     local json_path
     local separator="$3"
     local target_var_name="${HANDLER_ARGS[2]}"
@@ -195,15 +228,22 @@ json_array_join() {
     if [[ "$failed_key" =~ $regex_join_pattern ]]; then
         separator="${BASH_REMATCH[2]}"
         json_path="${BASH_REMATCH[1]}"
-        log_debug "failed_key: $failed_key separator:"-$separator-" "
+        log_debug "failed_key: $failed_key  json_path: $json_path"
     fi
     separator="${separator#[\'\"]}"
     separator="${separator%[\'\"]}"
     separator="${separator//[$'\n'$'\r'$'\t']/}"
     log_debug "Attempting to resolve .join() for failed_key:$failed_key json_path:$json_path separator: '$separator'"
-    # Get array content - flattened to one line by JQ
+    
+    # UPGRADE: Fetch JSON content via helper and pipe to jq
+    local json_content
+    json_content=$(_get_json_content "$json_input")
+    
+    json_path="${json_path%\[\]}"
+    
+    # Now get array content - flattened to one line by JQ
     local raw_array_content
-    raw_array_content=$(jq -r ".$json_path | if type == \"array\" then .[] else empty end" "$json_file" 2>/dev/null)
+    raw_array_content=$(echo "$json_content" | jq -r ".$json_path | if type == \"array\" then .[] else empty end" 2>/dev/null)
 
     if [[ -z "$raw_array_content" ]]; then
         log_debug "No array content found at path: $json_path for .join() in key: $failed_key"
@@ -226,6 +266,7 @@ json_array_join() {
 }
 
 resolve_key_missing_handler() { 
+    
     local missing_key_template="${HANDLER_ARGS[0]}"
     local json_file="${HANDLER_ARGS[1]}"
     local -n target_var_name="${HANDLER_ARGS[2]}"
@@ -253,13 +294,15 @@ resolve_key_missing_handler() {
         return 0
     fi
     
-    local regex_join_pattern='\$\{(.*)\.join\(('.*')\)\}'
+    
     
     if [[ "$missing_key_template" =~ $regex_join_pattern ]]; then
+        #DEBUG=true 
         #__fixed_key_ref="${missing_key%%.join*}"
         separator="${BASH_REMATCH[2]}"
         __fixed_key_ref=${BASH_REMATCH[1]}
         json_array_join $missing_key $__fixed_key_ref $separator
+        #DEBUG=false
         return 0
     fi
 
@@ -270,7 +313,7 @@ resolve_key_missing_handler() {
         return 0
     fi
 
-    log_error "unable to resolve missing key: $missing_key in $json_file"
+    log_error "unable to resolve missing key: $missing_key"
     exit 1
 }
 
@@ -301,9 +344,9 @@ register_handler "CIRCULAR_DEPENDENCY" "circular_dependency_handler"
 
 register_handler "RESOLVE_JSON_KEY_MISSING" "resolve_key_missing_handler" 
 
-# --- 4. MAIN ---
+# --- 5. MAIN ---
 main() {
-    [[ $# -lt 2 ]] && { echo "Usage: $0 <json_file> <key_path>" >&2; exit 1; }
+    [[ $# -lt 2 ]] && { echo "Usage: $0 <json_file_or_string> <key_path>" >&2; exit 1; }
     resolve_value "$1" "$2" 
 }
 
