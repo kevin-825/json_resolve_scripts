@@ -10,7 +10,7 @@ source "${SCRIPT_DIR}/shell_exception_handling_core/exception_handling_core.sh"
 
 # --- 1. REGEX PATTERNS ---
 export RE_JSON_TEMPLATE='\$\{((?:[^{}]|(?R))*)\}'
-RE_SHELL_COMMAND='\$\(([^)]+)\)'
+export RE_SHELL_COMMAND_TEMP='\$\(((?:[^()]|(?R))*)\)'
 RE_ENV_VARIABLE='\$([a-zA-Z_][a-zA-Z0-9_]*)'
 regex_join_pattern='\$\{(.*)\.join\(['\''"]([^'\''"]*)['\''"]\)\}'
 
@@ -115,20 +115,23 @@ _resolve_from_json() {
 }
 
 _resolve_subshell() {
-    local shell_template="$1"
-    if [[ "$shell_template" =~ $RE_SHELL_COMMAND ]]; then
-        local command="${BASH_REMATCH[1]}"
-        log_debug ">>> [INFO] Resolving subshell command: $command shell_template: $shell_template" >&2
-
-        local command_output
-        # 2. Assign the value (now $? will belong to eval)
-        command_output=$(eval "$command")
-        if [[ $? -ne 0 ]]; then
-            log_error "Subshell command failed: $command"
-            throw_exception "RESOLVE_SHELL_FAIL" 7 "$command"
-        fi
-        echo "$command_output"
+    local command="$1"
+    mapfile -t BASH_REMATCH < <(perl -nle 'if (/$ENV{RE_SHELL_COMMAND_TEMP}/) { print "$&\n$1"; exit }' <<< "$command")
+    if [[ ${#BASH_REMATCH[@]} -gt 0 && -n "${BASH_REMATCH[1]}" ]]; then
+        local nested_template="${BASH_REMATCH[0]}"
+        local nested_command="${BASH_REMATCH[1]}"
+        local resolved_text
+        resolved_text=$(_resolve_subshell "$nested_command") || exit $?
+        command="${command//"$nested_template"/"$resolved_text"}"
     fi
+    local command_output
+    # 2. Assign the value (now $? will belong to eval)
+    command_output=$(eval "$command")
+    if [[ $? -ne 0 ]]; then
+        log_error "Subshell command failed: $command"
+        throw_exception "RESOLVE_SHELL_FAIL" 7 "$command"
+    fi
+    echo "$command_output"
 }
 
 _resolve_env_var() {
@@ -166,10 +169,12 @@ resolve_single_line() {
             continue 
         fi
 
-        if [[ "$current_line" =~ $RE_SHELL_COMMAND ]]; then
+        mapfile -t BASH_REMATCH < <(perl -nle 'if (/$ENV{RE_SHELL_COMMAND_TEMP}/) { print "$&\n$1"; exit }' <<< "$current_line")
+        if [[ ${#BASH_REMATCH[@]} -gt 0 && -n "${BASH_REMATCH[1]}" ]]; then
             local template_found="${BASH_REMATCH[0]}"
+            local shell_command="${BASH_REMATCH[1]}"
             local resolved_text
-            resolved_text=$(_resolve_subshell "$template_found") || exit $?
+            resolved_text=$(_resolve_subshell "$shell_command") || exit $?
             current_line="${current_line//"$template_found"/"$resolved_text"}"
             continue
         fi
@@ -277,11 +282,12 @@ resolve_key_missing_handler() {
     mapfile -t BASH_REMATCH < <(perl -nle 'if (/$ENV{RE_JSON_TEMPLATE}/) { print "$&\n$1"; exit }' <<< "$missing_key_template")
     local missing_key="${BASH_REMATCH[1]}"
     
-
-    if [[ "$missing_key_template" =~ $RE_SHELL_COMMAND ]]; then
+    mapfile -t BASH_REMATCH < <(perl -nle 'if (/$ENV{RE_SHELL_COMMAND_TEMP}/) { print "$&\n$1"; exit }' <<< "$missing_key_template")
+    if [[ ${#BASH_REMATCH[@]} -gt 0 && -n "${BASH_REMATCH[1]}" ]]; then
         local template_found="${BASH_REMATCH[0]}"
+        local shell_command="${BASH_REMATCH[1]}"
         local resolved_text
-        resolved_text=$(_resolve_subshell "$template_found") || exit $?
+        resolved_text=$(_resolve_subshell "$shell_command") || exit $?
         $target_var_name="${missing_key_template//"$template_found"/"$resolved_text"}"
         return 0
     fi
