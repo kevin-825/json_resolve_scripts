@@ -10,7 +10,7 @@ source "${SCRIPT_DIR}/shell_exception_handling_core/exception_handling_core.sh"
 
 # --- 1. REGEX PATTERNS ---
 export RE_JSON_TEMPLATE='\$\{((?:[^{}]|(?R))*)\}'
-export RE_SHELL_COMMAND_TEMP='\$\(((?:[^()]|(?R))*)\)'
+export RE_SHELL_COMMAND_TEMP='\$\(((?:[^$()]+|\$(?!\()|\$\((?1)\)|\((?1)\))*)\)'
 RE_ENV_VARIABLE='\$([a-zA-Z_][a-zA-Z0-9_]*)'
 regex_join_pattern='\$\{(.*)\.join\(['\''"]([^'\''"]*)['\''"]\)\}'
 
@@ -149,7 +149,7 @@ _resolve_env_var() {
 resolve_single_line() {
     local json_input="$1"
     local current_line="$2"
-
+    log_debug "Resolving line: $current_line" >&2
     while [[ "$current_line" =~ \$ ]]; do
         local line_before_change="$current_line"
         mapfile -t BASH_REMATCH < <(perl -nle 'if (/$ENV{RE_JSON_TEMPLATE}/) { print "$&\n$1"; exit }' <<< "$current_line")
@@ -170,6 +170,7 @@ resolve_single_line() {
         fi
 
         mapfile -t BASH_REMATCH < <(perl -nle 'if (/$ENV{RE_SHELL_COMMAND_TEMP}/) { print "$&\n$1"; exit }' <<< "$current_line")
+        log_debug "Checking for shell command,  BASH_REMATCH[1]: ${BASH_REMATCH[1]} BASH_REMATCH[0]: ${BASH_REMATCH[0]}" >&2
         if [[ ${#BASH_REMATCH[@]} -gt 0 && -n "${BASH_REMATCH[1]}" ]]; then
             local template_found="${BASH_REMATCH[0]}"
             local shell_command="${BASH_REMATCH[1]}"
