@@ -11,7 +11,12 @@ source "${SCRIPT_DIR}/shell_exception_handling_core/exception_handling_core.sh"
 # --- 1. REGEX PATTERNS ---
 export RE_JSON_TEMPLATE='\$\{((?:[^{}]|(?R))*)\}'
 export RE_SHELL_COMMAND_TEMP='\$\(((?:[^$()]+|\$(?!\()|\$\((?1)\)|\((?1)\))*)\)'
-RE_ENV_VARIABLE='\$([a-zA-Z_][a-zA-Z0-9_]*)'
+
+
+#if ${myVAR} then capture group 1 ${BASH_REMATCH[1]} hold the value in BASH.
+#if $myVAR then capture group 2 ${BASH_REMATCH[2]} hold the value in BASH.
+RE_ENV_VARIABLE='\$\{([a-zA-Z_][a-zA-Z0-9_]*)\}|\$([a-zA-Z_][a-zA-Z0-9_]*)'
+
 regex_join_pattern='\$\{(.*)\.join\(['\''"]([^'\''"]*)['\''"]\)\}'
 
 # --- 2. STATE TRACKING ---
@@ -137,9 +142,13 @@ _resolve_subshell() {
 _resolve_env_var() {
     local env_template="$1"
     if [[ "$env_template" =~ $RE_ENV_VARIABLE ]]; then
-        local env_name="${BASH_REMATCH[1]}"
+        local env_name="${BASH_REMATCH[1]:-${BASH_REMATCH[2]}}"
         local env_value="${!env_name}"
-        [[ -z "$env_value" ]] && throw_exception "RESOLVE_ENV_MISSING" 8 "$env_name"
+        if [[ -z "$env_value" ]]; then
+            log_error " Error : Missing environment variable: $env_name, resolved as:$env_value"
+            throw_exception "RESOLVE_ENV_MISSING" 8 "$env_name"
+            return 1
+        fi
         echo "$env_value"
     fi
 }
@@ -289,15 +298,15 @@ resolve_key_missing_handler() {
         local shell_command="${BASH_REMATCH[1]}"
         local resolved_text
         resolved_text=$(_resolve_subshell "$shell_command") || exit $?
-        $target_var_name="${missing_key_template//"$template_found"/"$resolved_text"}"
+        target_var_name="${missing_key_template//"$template_found"/"$resolved_text"}"
         return 0
     fi
 
     if [[ "$missing_key_template" =~ $RE_ENV_VARIABLE ]]; then
         local template_found="${BASH_REMATCH[0]}"
         local resolved_text
-        resolved_text=$(_resolve_env_var "$template_found") || exit $?
-        $target_var_name="${missing_key_template//"$template_found"/"$resolved_text"}"
+        resolved_text=$(_resolve_env_var "$template_found")
+        target_var_name="${missing_key_template//"$template_found"/"$resolved_text"}"
         return 0
     fi
     
@@ -314,13 +323,13 @@ resolve_key_missing_handler() {
     fi
 
     local tmp_found_value=$( eval echo "$missing_key_template")
-    if [[ -n "$tmp_found_value" ]]; then
+    if [[ -n "$tmp_found_value" && $tmp_found_value != "$missing_key_template" ]]; then
         log_debug "Direct evaluation of template yielded: $tmp_found_value. Using it as found_value."
         target_var_name="$tmp_found_value"
         return 0
     fi
 
-    log_error "unable to resolve missing key: $missing_key"
+    log_error "[resolve_key_missing_handler] ERROR: unable to resolve missing_key_template: $missing_key_template"
     exit 1
 }
 
