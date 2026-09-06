@@ -4,7 +4,7 @@
 # DESCRIPTION: Generic JSON/Env/Shell Resolver (Supports File Path OR Raw String).
 # ==============================================================================
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
+#DEBUG=true
 # --- SOURCE DEPENDENCIES USING ABSOLUTE PATHS ---
 source "${SCRIPT_DIR}/shell_exception_handling_core/exception_handling_core.sh"
 
@@ -361,9 +361,38 @@ register_handler "CIRCULAR_DEPENDENCY" "circular_dependency_handler"
 register_handler "RESOLVE_JSON_KEY_MISSING" "resolve_key_missing_handler" 
 
 # --- 5. MAIN ---
+check_dependency() {
+    local cmd_name="$1"
+    
+    if ! command -v "$cmd_name" >/dev/null 2>&1; then
+        echo ">>> [ERROR] Dependency missing: '$cmd_name' is not installed."
+        echo ">>> [HINT] Install it using: sudo apt-get install -y $cmd_name"
+        return 1
+    fi
+    
+    log_debug ">>> [INFO] Dependency found: $cmd_name"
+    return 0
+}
+
+# --- Initialization / Setup ---
+# @description: Validates all external tool dependencies required by the script.
+verify_prerequisites() {
+    local missing_deps=false
+
+    check_dependency "jq" || missing_deps=true
+    
+    # Add other dependencies here if needed (e.g., docker)
+    # check_dependency "docker" || missing_deps=true
+
+    if [[ "$missing_deps" == true ]]; then
+        echo ">>> [FATAL] One or more prerequisites are missing. Aborting."
+        exit 1
+    fi
+}
+
 main() {
     [[ $# -lt 2 ]] && { echo "Usage: $0 <json_file_or_string> <key_path>" >&2; exit 1; }
     resolve_value "$1" "$2" 
 }
-
+verify_prerequisites
 main "$@"
